@@ -46,7 +46,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-The backend will run on `http://localhost:5000`
+The backend will run on `http://127.0.0.1:5000`
 
 ### Frontend Setup
 
@@ -65,7 +65,7 @@ npm install
 npm run dev
 ```
 
-The frontend will be available at `http://localhost:3000`
+The frontend will be available at `http://127.0.0.1:3000`
 
 ## How It Works
 
@@ -122,7 +122,7 @@ To use this app, you'll need:
 
 ## Development Notes
 
-- The backend uses CORS to allow requests from `http://localhost:3000`
+- The backend uses CORS to allow requests from `http://127.0.0.1:3000`
 - Firebase is set up but not actively used in the MVP (ready for future features like caching)
 - The niche finding algorithm has a maximum recursion depth of 2 to prevent excessive API calls
 

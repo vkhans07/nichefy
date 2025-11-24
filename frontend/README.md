@@ -14,7 +14,7 @@ npm install
 npm run dev
 ```
 
-The app will be available at `http://localhost:3000`
+The app will be available at `http://127.0.0.1:3000`
 
 ## Features
 
