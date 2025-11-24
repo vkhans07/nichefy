@@ -17,7 +17,7 @@ pip install -r requirements.txt
      1. Click on your app in the dashboard
      2. Click "Settings" button
      3. Scroll to "Redirect URIs" section
-     4. Click "Add" and enter: `http://localhost:5000/api/auth/callback`
+     4. Click "Add" and enter: `http://127.0.0.1:5000/api/auth/callback`
      5. **Make sure it matches EXACTLY** (including `http://`, no trailing slash)
      6. Click "Save" at the bottom
    - If you see an "invalid redirect uri" error, verify the URI in your Spotify app matches exactly what's shown in your server console
@@ -36,7 +36,7 @@ pip install -r requirements.txt
    FLASK_SECRET_KEY=your-secret-key-here-generate-a-random-string
    SPOTIFY_CLIENT_ID=your-spotify-client-id
    SPOTIFY_CLIENT_SECRET=your-spotify-client-secret
-   SPOTIFY_REDIRECT_URI=http://localhost:5000/api/auth/callback
+   SPOTIFY_REDIRECT_URI=http://127.0.0.1:5000/api/auth/callback
    ```
 
 4. (Optional) Set up Firebase:
@@ -48,7 +48,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-The server will run on `http://localhost:5000`
+The server will run on `http://127.0.0.1:5000`
 
 ## API Endpoints
 

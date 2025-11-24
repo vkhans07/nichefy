@@ -16,6 +16,8 @@ import { useState, useEffect } from 'react'
 import axios from 'axios'
 // Lucide React: Icon library for UI icons
 import { Search, Music, ExternalLink, Loader2, LogIn, LogOut, User, CheckCircle, X } from 'lucide-react'
+// API utility functions for handling base URLs
+import { getApiUrl } from '@/lib/api'
 
 // Configure axios to include credentials for session cookies
 axios.defaults.withCredentials = true
@@ -86,7 +88,7 @@ export default function Home() {
         params.access_token = tokenToUse
       }
       
-      const response = await axios.get('/api/user/profile', {
+      const response = await axios.get(getApiUrl('user/profile'), {
         params,
         withCredentials: true
       })
@@ -176,7 +178,7 @@ export default function Home() {
     try {
       setCheckingAuth(true)
       console.log('Checking auth status...')
-      const response = await axios.get('/api/auth/status', {
+      const response = await axios.get(getApiUrl('auth/status'), {
         withCredentials: true
       })
       console.log('Auth status response:', response.data)
@@ -210,7 +212,7 @@ export default function Home() {
    */
   const handleLogin = async () => {
     try {
-      const response = await axios.get('/api/auth/login')
+      const response = await axios.get(getApiUrl('auth/login'))
       if (response.data.auth_url) {
         // Redirect to Spotify authorization page
         window.location.href = response.data.auth_url
@@ -225,7 +227,7 @@ export default function Home() {
    */
   const handleLogout = async () => {
     try {
-      await axios.post('/api/auth/logout', {}, {
+      await axios.post(getApiUrl('auth/logout'), {}, {
         withCredentials: true
       })
       setIsAuthenticated(false)
@@ -264,7 +266,7 @@ export default function Home() {
         params.access_token = accessToken
       }
       
-      const response = await axios.get('/api/search/artists', {
+      const response = await axios.get(getApiUrl('search/artists'), {
         params,
         withCredentials: true
       })
@@ -322,7 +324,7 @@ export default function Home() {
         requestBody.access_token = accessToken
       }
       
-      const response = await axios.post('/api/recommend/niche', requestBody, {
+      const response = await axios.post(getApiUrl('recommend/niche'), requestBody, {
         withCredentials: true
       })
 

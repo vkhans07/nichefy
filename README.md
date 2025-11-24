@@ -14,6 +14,7 @@ A web application where users input a popular music artist, and the app recommen
 .
 ├── frontend/          # Next.js 14 application
 ├── backend/           # Flask API server
+│   └── functions/     # Firebase Cloud Functions deployment
 └── README.md
 ```
 
@@ -75,6 +76,41 @@ The frontend will be available at `http://127.0.0.1:3000`
 4. If fewer than 3 niche artists are found, the algorithm recursively searches through less popular related artists (up to depth 2)
 5. Results are displayed in a beautiful, responsive UI
 
+## Deployment
+
+### Frontend (Vercel)
+
+The frontend is ready to deploy on Vercel. See [VERCEL_DEPLOYMENT.md](./VERCEL_DEPLOYMENT.md) for detailed deployment instructions.
+
+**Quick steps:**
+1. Deploy backend to Firebase Functions (see below) or another service
+2. Set `NEXT_PUBLIC_API_URL` environment variable in Vercel to your backend URL
+3. Import the repository to Vercel and set root directory to `frontend`
+4. Deploy!
+
+### Backend (Firebase Cloud Functions)
+
+The backend can be deployed to Firebase Cloud Functions. See [FIREBASE_DEPLOYMENT.md](./FIREBASE_DEPLOYMENT.md) for detailed instructions.
+
+**Quick steps:**
+1. Install Firebase CLI: `npm install -g firebase-tools`
+2. Login: `firebase login`
+3. Initialize: `firebase init functions`
+4. Set environment variables (see FIREBASE_DEPLOYMENT.md)
+5. Deploy: `firebase deploy --only functions`
+
+**Alternative Backend Hosting:**
+- **Railway**: Simple Python deployment
+- **Render**: Free tier available
+- **Heroku**: Classic PaaS option
+- **Fly.io**: Modern alternative
+
+Make sure to:
+- Set all environment variables (see deployment guides)
+- Update CORS origins to include your frontend domain
+- Set `SESSION_COOKIE_SECURE = True` for HTTPS
+- Update Spotify redirect URI to match your backend URL
+
 ## API Endpoints
 
 ### POST `/api/recommend/niche`
@@ -125,6 +161,13 @@ To use this app, you'll need:
 - The backend uses CORS to allow requests from `http://127.0.0.1:3000`
 - Firebase is set up but not actively used in the MVP (ready for future features like caching)
 - The niche finding algorithm has a maximum recursion depth of 2 to prevent excessive API calls
+
+## Deployment Guides
+
+- [Vercel Deployment Guide](./VERCEL_DEPLOYMENT.md) - Frontend deployment
+- [Firebase Deployment Guide](./FIREBASE_DEPLOYMENT.md) - Backend deployment
+- [Deployment Checklist](./DEPLOYMENT_CHECKLIST.md) - Step-by-step checklist
+- [Bug Fixes Summary](./DEPLOYMENT_BUGFIXES.md) - All fixes applied
 
 ## License
 

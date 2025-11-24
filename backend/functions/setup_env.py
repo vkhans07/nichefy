@@ -16,7 +16,7 @@ def create_env_file():
         print("  - FLASK_SECRET_KEY")
         print("  - SPOTIFY_CLIENT_ID")
         print("  - SPOTIFY_CLIENT_SECRET")
-        print("  - SPOTIFY_REDIRECT_URI (optional, defaults to http://localhost:5000/api/auth/callback)")
+        print("  - SPOTIFY_REDIRECT_URI (optional, defaults to http://127.0.0.1:5000/api/auth/callback)")
         return
     
     # Create template .env file
@@ -28,13 +28,13 @@ FLASK_SECRET_KEY=change-me-to-a-random-string
 # Get these from https://developer.spotify.com/dashboard
 # 1. Create a new app or use an existing one
 # 2. Copy the Client ID and Client Secret
-# 3. Add this redirect URI to your app: http://localhost:5000/api/auth/callback
+# 3. Add this redirect URI to your app: http://127.0.0.1:5000/api/auth/callback
 SPOTIFY_CLIENT_ID=your-spotify-client-id-here
 SPOTIFY_CLIENT_SECRET=your-spotify-client-secret-here
 
 # Spotify OAuth Redirect URI
 # Must match the redirect URI configured in your Spotify app settings
-SPOTIFY_REDIRECT_URI=http://localhost:5000/api/auth/callback
+SPOTIFY_REDIRECT_URI=http://127.0.0.1:5000/api/auth/callback
 """
     
     try:
@@ -46,7 +46,7 @@ SPOTIFY_REDIRECT_URI=http://localhost:5000/api/auth/callback
         print("   2. Replace 'your-spotify-client-id-here' with your actual Client ID")
         print("   3. Replace 'your-spotify-client-secret-here' with your actual Client Secret")
         print("   4. Generate a random string for FLASK_SECRET_KEY")
-        print("   5. Add http://localhost:5000/api/auth/callback to your Spotify app's Redirect URIs")
+        print("   5. Add http://127.0.0.1:5000/api/auth/callback to your Spotify app's Redirect URIs")
     except Exception as e:
         print(f"✗ Failed to create .env file: {e}")
 

@@ -16,6 +16,28 @@ import os
 from dotenv import load_dotenv
 import secrets
 
+# Welcome to Cloud Functions for Firebase for Python!
+# Deploy with `firebase deploy --only functions`
+
+from firebase_functions import https_fn
+from firebase_functions.options import set_global_options
+from firebase_admin import initialize_app
+
+# Initialize Firebase Admin (uses default credentials in Cloud Functions)
+try:
+    initialize_app()
+    print("✓ Firebase Admin initialized")
+except ValueError:
+    # Already initialized
+    pass
+
+# For cost control, you can set the maximum number of containers that can be
+# running at the same time. This helps mitigate the impact of unexpected
+# traffic spikes by instead downgrading performance. This limit is a per-function
+# limit. You can override the limit for each function using the max_instances
+# parameter in the decorator, e.g. @https_fn.on_request(max_instances=5).
+set_global_options(max_instances=10)
+
 # Get the directory where this script is located
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(BASE_DIR, '.env')
@@ -40,19 +62,43 @@ app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(16))
 app.config['SESSION_COOKIE_NAME'] = 'nichefy_session'
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Use Lax for same-site requests
-app.config['SESSION_COOKIE_SECURE'] = False  # Set to True in production with HTTPS
-app.config['SESSION_COOKIE_DOMAIN'] = None  # Allow cross-port cookies on localhost
+# Session cookie configuration for production
+is_production = os.getenv('ENVIRONMENT', '').lower() == 'production' or os.getenv('GCP_PROJECT') is not None
+app.config['SESSION_COOKIE_SAMESITE'] = 'None' if is_production else 'Lax'  # None for cross-domain in production
+app.config['SESSION_COOKIE_SECURE'] = is_production  # True in production with HTTPS
+app.config['SESSION_COOKIE_DOMAIN'] = None  # Let browser set domain
 app.config['SESSION_COOKIE_PATH'] = '/'  # Make cookie available for all paths
 
 # Enable CORS (Cross-Origin Resource Sharing) to allow requests from frontend
-# This allows the Next.js app on localhost:3000 to call this API on localhost:5000
-CORS(app, origins=["http://127.0.0.1:3000","http://localhost:3000"], supports_credentials=True)
+# Get allowed origins from environment variable, with fallback for local development
+CORS_ORIGINS = os.getenv('CORS_ORIGINS', 'http://127.0.0.1:3000,http://localhost:3000')
+# Split comma-separated origins into list
+allowed_origins = [origin.strip() for origin in CORS_ORIGINS.split(',')]
+# Allow all Vercel preview deployments if specified
+if os.getenv('ALLOW_VERCEL_PREVIEWS', 'false').lower() == 'true':
+    allowed_origins.append('https://*.vercel.app')
+
+CORS(app, origins=allowed_origins, supports_credentials=True)
+print(f"✓ CORS configured for origins: {allowed_origins}")
+
+# Frontend URL for OAuth redirects (used in callback)
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 
 # Spotify OAuth configuration
 SPOTIFY_CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID')
 SPOTIFY_CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET')
-SPOTIFY_REDIRECT_URI = os.getenv('SPOTIFY_REDIRECT_URI', 'http://localhost:5000/api/auth/callback')
+# For Firebase Functions, construct redirect URI from function URL or use env var
+FUNCTION_REGION = os.getenv('FUNCTION_REGION', 'us-central1')
+PROJECT_ID = os.getenv('GCP_PROJECT', os.getenv('GCLOUD_PROJECT', ''))
+FUNCTION_NAME = os.getenv('FUNCTION_TARGET', 'nichefy_api')
+
+# Build Firebase Function URL if not provided
+if PROJECT_ID:
+    default_redirect_uri = f"https://{FUNCTION_REGION}-{PROJECT_ID}.cloudfunctions.net/{FUNCTION_NAME}/api/auth/callback"
+else:
+    default_redirect_uri = os.getenv('BACKEND_URL', 'http://localhost:5000') + '/api/auth/callback'
+
+SPOTIFY_REDIRECT_URI = os.getenv('SPOTIFY_REDIRECT_URI', default_redirect_uri)
 
 # Debug: Print credential status (without showing actual values)
 if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
@@ -237,11 +283,11 @@ def spotify_callback():
             if "redirect_uri" in error_description.lower() or "invalid" in error_description.lower():
                 error_msg += f"\n\nMake sure you've added this EXACT redirect URI to your Spotify app:\n{SPOTIFY_REDIRECT_URI}"
             
-            return redirect(f"http://localhost:3000?error={error}&details={error_description}")
+            return redirect(f"{FRONTEND_URL}?error={error}&details={error_description}")
         
         if not code:
             print("✗ No authorization code received in callback")
-            return redirect("http://localhost:3000?error=no_code")
+            return redirect(f"{FRONTEND_URL}?error=no_code")
         
         print(f"✓ Received authorization code, exchanging for token...")
         sp_oauth = get_spotify_oauth()
@@ -249,7 +295,7 @@ def spotify_callback():
         
         if not token_info:
             print("✗ Failed to exchange code for token")
-            return redirect("http://localhost:3000?error=token_failed")
+            return redirect(f"{FRONTEND_URL}?error=token_failed")
         
         access_token = token_info['access_token']
         refresh_token = token_info.get('refresh_token')
@@ -267,11 +313,10 @@ def spotify_callback():
         print(f"✓ Access token stored in session: {bool(session.get('access_token'))}")
         print(f"✓ Session cookie will be set: {app.config['SESSION_COOKIE_NAME']}")
         
-        # For localhost development: pass token in URL as fallback since cookies
-        # set on port 5000 may not be accessible from port 3000
-        # In production with same domain, remove token from URL and use only cookies
-        redirect_url = f"http://localhost:3000?logged_in=true&token={access_token}"
-        print(f"✓ Redirecting to frontend with logged_in=true")
+        # In production, try to use cookies only. For development or if cookies fail,
+        # pass token in URL as fallback
+        redirect_url = f"{FRONTEND_URL}?logged_in=true&token={access_token}"
+        print(f"✓ Redirecting to frontend: {FRONTEND_URL}")
         
         # Create response to ensure cookie is set before redirect
         from flask import make_response
@@ -287,7 +332,7 @@ def spotify_callback():
         if "redirect_uri" in error_msg.lower() or "invalid" in error_msg.lower():
             error_msg += f"\n\nMake sure you've added this EXACT redirect URI to your Spotify app:\n{SPOTIFY_REDIRECT_URI}"
         
-        return redirect(f"http://localhost:3000?error=callback_error&details={error_msg}")
+        return redirect(f"{FRONTEND_URL}?error=callback_error&details={error_msg}")
 
 @app.route('/api/auth/status', methods=['GET'])
 def auth_status():
@@ -470,6 +515,93 @@ def user_top_artists_recommendations():
         return jsonify({"error": str(e)}), 500
 
 
+# Export Flask app as Firebase Cloud Function
+# For Firebase Functions Python SDK, we wrap the Flask app
+# This allows Firebase to route all HTTP requests through Flask
+
+# WSGI adapter for Firebase Functions
+from werkzeug.wrappers import Request as WerkzeugRequest
+
+def create_wsgi_environ(firebase_req: https_fn.Request) -> dict:
+    """Convert Firebase Functions Request to WSGI environ dict."""
+    # Parse URL
+    from urllib.parse import urlparse, parse_qs
+    parsed = urlparse(firebase_req.url)
+    
+    # Build WSGI environ
+    environ = {
+        'REQUEST_METHOD': firebase_req.method,
+        'SCRIPT_NAME': '',
+        'PATH_INFO': parsed.path,
+        'QUERY_STRING': parsed.query,
+        'CONTENT_TYPE': firebase_req.headers.get('Content-Type', ''),
+        'CONTENT_LENGTH': str(len(firebase_req.get_data())) if firebase_req.method in ['POST', 'PUT', 'PATCH'] else '0',
+        'SERVER_NAME': parsed.hostname or 'localhost',
+        'SERVER_PORT': str(parsed.port) if parsed.port else ('443' if parsed.scheme == 'https' else '80'),
+        'SERVER_PROTOCOL': 'HTTP/1.1',
+        'wsgi.version': (1, 0),
+        'wsgi.url_scheme': parsed.scheme,
+        'wsgi.input': firebase_req.get_data(),
+        'wsgi.errors': None,
+        'wsgi.multithread': False,
+        'wsgi.multiprocess': True,
+        'wsgi.run_once': False,
+    }
+    
+    # Add HTTP headers
+    for key, value in firebase_req.headers.items():
+        key = key.upper().replace('-', '_')
+        if key not in ('CONTENT_TYPE', 'CONTENT_LENGTH'):
+            environ[f'HTTP_{key}'] = value
+    
+    return environ
+
+@https_fn.on_request(
+    cors=https_fn.CorsOptions(
+        cors_origins=allowed_origins,
+        cors_methods=["GET", "POST", "OPTIONS"],
+        cors_allow_credentials=True,
+    ),
+    max_instances=10
+)
+def nichefy_api(req: https_fn.Request) -> https_fn.Response:
+    """
+    Firebase Cloud Function handler.
+    Routes all HTTP requests to the Flask application.
+    """
+    # Create WSGI environ from Firebase request
+    environ = create_wsgi_environ(req)
+    
+    # Call Flask app as WSGI application
+    response_data = []
+    status_code = [200]
+    response_headers = [{}]
+    
+    def start_response(status, headers):
+        status_code[0] = int(status.split()[0])
+        response_headers[0] = dict(headers)
+    
+    # Call Flask app with WSGI interface
+    try:
+        for data in app(environ, start_response):
+            if data:
+                response_data.append(data)
+        
+        # Combine response data
+        body = b''.join(response_data) if response_data else b''
+        
+        return https_fn.Response(
+            body,
+            status=status_code[0],
+            headers=response_headers[0],
+        )
+    except Exception as exc:
+        app.logger.exception(exc)
+        return https_fn.Response(
+            b'Internal Server Error',
+            status=500,
+        )
+
 # Run the Flask development server when this file is executed directly
 if __name__ == '__main__':
     print("\n" + "="*60)
@@ -480,12 +612,13 @@ if __name__ == '__main__':
     if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
         print("\n⚠️  WARNING: Spotify credentials not configured!")
         print("\nTo set up Spotify OAuth:")
-        print("1. Create a .env file in the backend directory")
+        print("1. Create a .env file in the backend/functions directory")
         print(f"2. Add the following variables to {BASE_DIR}\\.env:")
         print("   SPOTIFY_CLIENT_ID=your-client-id")
         print("   SPOTIFY_CLIENT_SECRET=your-client-secret")
         print("   SPOTIFY_REDIRECT_URI=http://localhost:5000/api/auth/callback")
         print("   FLASK_SECRET_KEY=any-random-string-here")
+        print("   FRONTEND_URL=http://localhost:3000")
         print("\n3. Get your credentials from: https://developer.spotify.com/dashboard")
         print("4. Make sure to add the redirect URI to your Spotify app settings\n")
     else:
