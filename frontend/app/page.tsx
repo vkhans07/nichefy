@@ -118,19 +118,30 @@ export default function Home() {
         console.log('Login success detected, checking auth status...')
         setError('')
         setLoginSuccess(true)
+        setCheckingAuth(true)
         
-        // Check if token is in URL (fallback for localhost development)
-        const tokenFromUrl = params.get('token')
-        if (tokenFromUrl) {
-          console.log('Token found in URL, using it directly')
-          setAccessToken(tokenFromUrl)
-          setIsAuthenticated(true)
-          await fetchUserProfile(tokenFromUrl)
-        } else {
-          // Small delay to ensure session cookie is set
-          await new Promise(resolve => setTimeout(resolve, 100))
-          // Check auth status from session
-          await checkAuthStatus()
+        try {
+          // Check if token is in URL (fallback for localhost development)
+          const tokenFromUrl = params.get('token')
+          if (tokenFromUrl) {
+            console.log('Token found in URL, using it directly')
+            localStorage.setItem('access_token', tokenFromUrl)
+            setAccessToken(tokenFromUrl)
+            setIsAuthenticated(true)
+            await fetchUserProfile(tokenFromUrl)
+          } else {
+            // Small delay to ensure session cookie is set
+            await new Promise(resolve => setTimeout(resolve, 500))
+            // Check auth status from session
+            await checkAuthStatus()
+          }
+        } catch (err: any) {
+          console.error('Error during login processing:', err)
+          setError('Failed to complete login. Please try again.')
+          setIsAuthenticated(false)
+        } finally {
+          // Always set checkingAuth to false after processing
+          setCheckingAuth(false)
         }
         
         // Clean up URL (remove both logged_in and token params)
@@ -159,6 +170,7 @@ export default function Home() {
         }
         
         setError(errorMessage)
+        setCheckingAuth(false)
         // Clean up URL
         window.history.replaceState({}, '', window.location.pathname)
       } else {
@@ -178,20 +190,33 @@ export default function Home() {
     try {
       setCheckingAuth(true)
       console.log('Checking auth status...')
+      
+      // 1. GET TOKEN FROM STORAGE
+      const storedToken = localStorage.getItem('spotify_access_token')
+      
+      // 2. PASS TOKEN TO BACKEND CHECK
+      // This uses the logic in main.py lines 353-356 where it checks query params
       const response = await axios.get(getApiUrl('auth/status'), {
+        params: { access_token: storedToken }, 
         withCredentials: true
       })
+      
       console.log('Auth status response:', response.data)
       const authenticated = response.data.authenticated
       setIsAuthenticated(authenticated)
+      
       if (authenticated && response.data.access_token) {
         const token = response.data.access_token
+        // Ensure it's saved/refreshed in storage
+        localStorage.setItem('spotify_access_token', token)
+        
         console.log('User is authenticated, setting token and fetching profile...')
         setAccessToken(token)
-        // Fetch user profile when authenticated
         await fetchUserProfile(token)
       } else {
         console.log('User is not authenticated')
+        // Clear invalid token
+        localStorage.removeItem('spotify_access_token')
         setAccessToken(null)
         setSelectedArtist(null)
         setNicheArtists([])
@@ -199,6 +224,7 @@ export default function Home() {
       }
     } catch (err: any) {
       console.error('Error checking auth status:', err)
+      localStorage.removeItem('spotify_access_token')
       setIsAuthenticated(false)
       setAccessToken(null)
       setUserProfile(null)
@@ -227,6 +253,7 @@ export default function Home() {
    */
   const handleLogout = async () => {
     try {
+      localStorage.removeItem('spotify_access_token')
       await axios.post(getApiUrl('auth/logout'), {}, {
         withCredentials: true
       })
@@ -281,6 +308,8 @@ export default function Home() {
       }
     } catch (err: any) {
       if (err.response?.status === 401) {
+        localStorage.removeItem('spotify_access_token')
+        setAccessToken(null)
         setError('Not authenticated. Please log in with Spotify.')
         setIsAuthenticated(false)
       } else {

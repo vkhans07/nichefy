@@ -33,7 +33,8 @@ firebase functions:config:set \
   spotify.redirect_uri="https://us-central1-your-project.cloudfunctions.net/nichefy_api/api/auth/callback" \
   frontend.url="https://your-app.vercel.app" \
   flask.secret_key="your-random-secret-key" \
-  cors.origins="https://your-app.vercel.app,https://*.vercel.app"
+  cors.origins="https://your-app.vercel.app,https://*.vercel.app" \
+  perplexity.api_key="your-perplexity-api-key"
 ```
 
 **Or use Firebase Console:**
@@ -96,6 +97,7 @@ SPOTIFY_REDIRECT_URI=http://localhost:5000/api/auth/callback
 FRONTEND_URL=http://localhost:3000
 CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 FLASK_SECRET_KEY=local-dev-secret
+PERPLEXITY_API_KEY=your-perplexity-api-key-here
 ```
 
 ### 2. Run Locally
@@ -121,6 +123,7 @@ firebase emulators:start --only functions
 | `SPOTIFY_REDIRECT_URI` | OAuth callback URL | `https://us-central1-project.cloudfunctions.net/nichefy_api/api/auth/callback` |
 | `FRONTEND_URL` | Frontend URL for redirects | `https://your-app.vercel.app` |
 | `FLASK_SECRET_KEY` | Session encryption key | (random secure string) |
+| `PERPLEXITY_API_KEY` | Perplexity API key for finding related artists | (from [Perplexity API Settings](https://www.perplexity.ai/settings/api)) |
 
 ### Optional Environment Variables
 

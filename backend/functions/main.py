@@ -4,7 +4,7 @@ Main application file that handles HTTP requests and serves the niche artist rec
 """
 
 # Flask: Web framework for creating the REST API
-from flask import Flask, request, jsonify, session, redirect
+from flask import Flask, request, jsonify, session, redirect, Response, stream_with_context
 # CORS: Allows frontend (running on different port) to make requests to this backend
 from flask_cors import CORS
 # Import our custom function that finds niche artists using recursive algorithm
@@ -13,6 +13,8 @@ from niche_logic import find_niche_cousins, recommend_niche_for_top_artists
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 import os
+import json
+import time
 from dotenv import load_dotenv
 import secrets
 
@@ -22,6 +24,41 @@ import secrets
 from firebase_functions import https_fn
 from firebase_functions.options import set_global_options
 from firebase_admin import initialize_app
+
+
+import time
+
+def get_valid_token_from_session():
+    """
+    Retrieves token from session, refreshing it if it's expired.
+    Returns None if no token is available or refresh fails.
+    """
+    token = session.get('access_token')
+    expires_at = session.get('expires_at')
+    
+    if not token:
+        return None
+
+    # Check if token is expired (or close to expiring, e.g., within 60 seconds)
+    if expires_at and time.time() > (expires_at - 60):
+        print("⟳ Token expired (or expiring soon), attempting refresh...")
+        refresh_token = session.get('refresh_token')
+        
+        if refresh_token:
+            try:
+                sp_oauth = get_spotify_oauth()
+                token_info = sp_oauth.refresh_access_token(refresh_token)
+                
+                # Update session
+                session['access_token'] = token_info['access_token']
+                session['expires_at'] = token_info['expires_at']
+                
+                print("✓ Token refreshed successfully")
+                return token_info['access_token']
+            except Exception as e:
+                print(f"✗ Failed to refresh token: {e}")
+                return None
+    return token
 
 # Initialize Firebase Admin (uses default credentials in Cloud Functions)
 try:
@@ -62,6 +99,10 @@ app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(16))
 app.config['SESSION_COOKIE_NAME'] = 'nichefy_session'
 app.config['SESSION_COOKIE_HTTPONLY'] = True
+# Increase timeout for long-running requests (e.g., Perplexity API calls)
+# This helps prevent connection timeouts during API processing
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching for development
+# Note: For production, consider using a proper WSGI server (gunicorn, uwsgi) with timeout settings
 # Session cookie configuration for production
 is_production = os.getenv('ENVIRONMENT', '').lower() == 'production' or os.getenv('GCP_PROJECT') is not None
 app.config['SESSION_COOKIE_SAMESITE'] = 'None' if is_production else 'Lax'  # None for cross-domain in production
@@ -74,12 +115,17 @@ app.config['SESSION_COOKIE_PATH'] = '/'  # Make cookie available for all paths
 CORS_ORIGINS = os.getenv('CORS_ORIGINS', 'http://127.0.0.1:3000,http://localhost:3000')
 # Split comma-separated origins into list
 allowed_origins = [origin.strip() for origin in CORS_ORIGINS.split(',')]
-# Allow all Vercel preview deployments if specified
-if os.getenv('ALLOW_VERCEL_PREVIEWS', 'false').lower() == 'true':
-    allowed_origins.append('https://*.vercel.app')
 
-CORS(app, origins=allowed_origins, supports_credentials=True)
-print(f"✓ CORS configured for origins: {allowed_origins}")
+# Configure CORS
+# Note: For Vercel preview deployments, add specific URLs to CORS_ORIGINS
+# or set ALLOW_VERCEL_PREVIEWS=true and we'll use a more permissive CORS
+if os.getenv('ALLOW_VERCEL_PREVIEWS', 'false').lower() == 'true':
+    # Allow all origins when ALLOW_VERCEL_PREVIEWS is true (for development/testing)
+    CORS(app, supports_credentials=True)
+    print(f"✓ CORS configured to allow all origins (ALLOW_VERCEL_PREVIEWS=true)")
+else:
+    CORS(app, origins=allowed_origins, supports_credentials=True)
+    print(f"✓ CORS configured for origins: {allowed_origins}")
 
 # Frontend URL for OAuth redirects (used in callback)
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
@@ -126,44 +172,172 @@ def get_spotify_oauth():
         show_dialog=True
     )
 
+def _recommend_niche_stream(artist_id, access_token):
+    """
+    Stream progress updates using Server-Sent Events (SSE) while finding niche artists.
+    """
+    import queue
+    import threading
+    
+    def generate():
+        try:
+            # Use a queue to pass progress updates from callback to generator
+            progress_queue = queue.Queue()
+            
+            def progress_callback(event_type, data):
+                progress_queue.put({
+                    'type': event_type,
+                    'data': data,
+                    'timestamp': time.time()
+                })
+            
+            # Send initial message
+            yield f"data: {json.dumps({'type': 'start', 'message': 'Starting search for niche artists...'})}\n\n"
+            
+            niche_artists = []
+            error_occurred = None
+            search_complete = threading.Event()
+            
+            def run_search():
+                nonlocal niche_artists, error_occurred
+                try:
+                    niche_artists = find_niche_cousins(
+                        artist_id, 
+                        access_token, 
+                        max_popularity=40, 
+                        min_popularity=15,
+                        progress_callback=progress_callback
+                    )
+                except Exception as e:
+                    error_occurred = str(e)
+                finally:
+                    search_complete.set()
+            
+            # Start search in a thread
+            search_thread = threading.Thread(target=run_search, daemon=True)
+            search_thread.start()
+            
+            # Monitor for progress updates and completion
+            while not search_complete.is_set() or not progress_queue.empty():
+                try:
+                    # Get progress update with timeout
+                    update = progress_queue.get(timeout=0.1)
+                    yield f"data: {json.dumps(update)}\n\n"
+                except queue.Empty:
+                    # No update available, continue waiting
+                    continue
+            
+            # Wait for thread to complete
+            search_thread.join(timeout=1)
+            
+            if error_occurred:
+                yield f"data: {json.dumps({'type': 'error', 'message': error_occurred})}\n\n"
+                return
+            
+            # Process and send final results
+            seen_ids = set()
+            unique_artists = []
+            
+            for artist in niche_artists:
+                if artist['id'] not in seen_ids:
+                    seen_ids.add(artist['id'])
+                    unique_artists.append({
+                        'id': artist['id'],
+                        'name': artist['name'],
+                        'image': artist['images'][0]['url'] if artist.get('images') else None,
+                        'popularity': artist['popularity'],
+                        'spotify_url': artist['external_urls'].get('spotify', ''),
+                        'genres': artist.get('genres', [])
+                    })
+            
+            # Send final result
+            yield f"data: {json.dumps({'type': 'complete', 'artists': unique_artists, 'count': len(unique_artists)})}\n\n"
+            
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+    
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no'  # Disable buffering in nginx
+        }
+    )
+
 @app.route('/api/recommend/niche', methods=['POST'])
 def recommend_niche():
     """
     Main API endpoint for finding niche artists.
+    Supports both regular JSON response and Server-Sent Events (SSE) streaming.
     
     Accepts POST request with:
     - artist_id: Spotify artist ID to use as seed
+    - stream: (optional) If true, returns SSE stream with progress updates
     
     Access token is obtained from session (if logged in via OAuth) or request body (for backwards compatibility).
     
     Returns JSON with list of niche artists (popularity <= 20) that are similar to the seed artist.
     """
     try:
-        # Extract JSON data from the request body
         data = request.get_json() or {}
+        artist_id = data.get('artist_id')
+        stream_mode = data.get('stream', False)
         
-        # Extract required fields from the request
-        artist_id = data.get('artist_id')  # Spotify artist ID (e.g., "06HL4z0CvFAxyc27GXpf02")
+        # --- CHANGE START ---
+        # Try to get a valid (refreshed) token from session first
+        access_token = get_valid_token_from_session()
         
-        # Get access token from session (OAuth) or request body (backwards compatibility)
-        access_token = session.get('access_token') or data.get('access_token')
+        # If not in session, try request body (backwards compatibility)
+        if not access_token:
+             access_token = data.get('access_token')
+        # --- CHANGE END ---
         
-        # Validate required fields are present
         if not artist_id:
             return jsonify({"error": "artist_id is required"}), 400
-        
+            
         if not access_token:
-            return jsonify({"error": "Not authenticated. Please log in with Spotify."}), 401
+            return jsonify({"error": "Not authenticated or session expired."}), 401
+        
+        # Debug: Verify token format
+        if not isinstance(access_token, str) or len(access_token.strip()) == 0:
+            return jsonify({"error": "Invalid access token format"}), 401
+        
+        print(f"✓ Calling find_niche_cousins with artist_id={artist_id}, token length={len(access_token)}")
+        
+        # If streaming mode, use SSE
+        if stream_mode:
+            return _recommend_niche_stream(artist_id, access_token)
         
         # Call the recursive algorithm to find niche artists
         # This function searches through related artists and their related artists
-        # to find artists with popularity <= 20
-        niche_artists = find_niche_cousins(artist_id, access_token)
+        # to find artists with popularity between 5 and 20
+        try:
+            niche_artists = find_niche_cousins(artist_id, access_token, max_popularity=40, min_popularity=15)
+        except Exception as e:
+            error_msg = str(e)
+            print(f"✗ Error in find_niche_cousins: {error_msg}")
+            # Return error response instead of empty list
+            return jsonify({
+                "success": False,
+                "error": f"Failed to find niche artists: {error_msg}",
+                "artists": [],
+                "count": 0
+            }), 500
         
         # Remove duplicates based on artist ID
         # The recursive algorithm might return the same artist multiple times
         seen_ids = set()  # Track which artist IDs we've already seen
         unique_artists = []  # Store unique artists only
+        
+        if not niche_artists:
+            # Log why no niche artists were found
+            print(f"⚠️  No niche artists found for artist_id: {artist_id}")
+            print(f"   Possible reasons:")
+            print(f"   1. All related artists have popularity > 20")
+            print(f"   2. The artist has no related artists (404 error from Spotify)")
+            print(f"   3. The recursive search couldn't find niche artists even at depth 2")
+            print(f"   4. The access token may have insufficient permissions")
         
         for artist in niche_artists:
             if artist['id'] not in seen_ids:
@@ -173,7 +347,7 @@ def recommend_niche():
                     'id': artist['id'],  # Spotify artist ID
                     'name': artist['name'],  # Artist name
                     # Get first image URL if available, otherwise None
-                    'image': artist['images'][0]['url'] if artist.get('images') else None,
+                    'image': artist['images'][0]['url'] if artist.get('images') and len(artist['images']) > 0 else None,
                     'popularity': artist['popularity'],  # Popularity score (0-100)
                     'spotify_url': artist['external_urls'].get('spotify', ''),  # Link to Spotify page
                     'genres': artist.get('genres', [])  # List of genre tags
@@ -291,12 +465,15 @@ def spotify_callback():
         
         print(f"✓ Received authorization code, exchanging for token...")
         sp_oauth = get_spotify_oauth()
-        token_info = sp_oauth.get_access_token(code)
+        # Explicitly use as_dict=True to avoid deprecation warning and get full token info
+        # This ensures we get a dict with access_token, refresh_token, and expires_at
+        token_info = sp_oauth.get_access_token(code, as_dict=True)
         
         if not token_info:
             print("✗ Failed to exchange code for token")
             return redirect(f"{FRONTEND_URL}?error=token_failed")
         
+        # Extract token information from dict response
         access_token = token_info['access_token']
         refresh_token = token_info.get('refresh_token')
         expires_at = token_info.get('expires_at', 0)
@@ -339,39 +516,50 @@ def auth_status():
     """
     Check if user is authenticated and return token info.
     """
-    print(f"✓ Auth status check - Session keys: {list(session.keys())}")
-    access_token = session.get('access_token')
-    expires_at = session.get('expires_at', 0)
-    
-    if not access_token:
-        print("✗ No access token found in session")
-        return jsonify({"authenticated": False}), 200
-    
-    print(f"✓ Access token found in session")
-    
-    # Check if token is expired
-    import time
-    if expires_at and time.time() > expires_at:
-        # Try to refresh token
-        refresh_token = session.get('refresh_token')
-        if refresh_token:
-            try:
-                sp_oauth = get_spotify_oauth()
-                token_info = sp_oauth.refresh_access_token(refresh_token)
-                access_token = token_info['access_token']
-                session['access_token'] = access_token
-                session['expires_at'] = token_info.get('expires_at', 0)
-            except:
+    try:
+        print(f"✓ Auth status check - Session keys: {list(session.keys())}")
+        # Also check for token in query params (fallback for cross-domain issues)
+        access_token = request.args.get('access_token') or session.get('access_token')
+        expires_at = session.get('expires_at', 0)
+        
+        if not access_token:
+            print("✗ No access token found in session or query params")
+            return jsonify({"authenticated": False}), 200
+        
+        print(f"✓ Access token found in session")
+        
+        # Check if token is expired
+        import time
+        if expires_at and time.time() > expires_at:
+            # Try to refresh token
+            refresh_token = session.get('refresh_token')
+            if refresh_token:
+                try:
+                    sp_oauth = get_spotify_oauth()
+                    token_info = sp_oauth.refresh_access_token(refresh_token)
+                    access_token = token_info['access_token']
+                    session['access_token'] = access_token
+                    session['expires_at'] = token_info.get('expires_at', 0)
+                except:
+                    session.clear()
+                    return jsonify({"authenticated": False}), 200
+            else:
                 session.clear()
                 return jsonify({"authenticated": False}), 200
-        else:
-            session.clear()
-            return jsonify({"authenticated": False}), 200
-    
-    return jsonify({
-        "authenticated": True,
-        "access_token": access_token
-    }), 200
+        
+        return jsonify({
+            "authenticated": True,
+            "access_token": access_token
+        }), 200
+        
+    except Exception as e:
+        print(f"✗ Error in auth status check: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "authenticated": False,
+            "error": str(e)
+        }), 200
 
 @app.route('/api/auth/logout', methods=['POST'])
 def spotify_logout():
@@ -557,11 +745,6 @@ def create_wsgi_environ(firebase_req: https_fn.Request) -> dict:
     return environ
 
 @https_fn.on_request(
-    cors=https_fn.CorsOptions(
-        cors_origins=allowed_origins,
-        cors_methods=["GET", "POST", "OPTIONS"],
-        cors_allow_credentials=True,
-    ),
     max_instances=10
 )
 def nichefy_api(req: https_fn.Request) -> https_fn.Response:

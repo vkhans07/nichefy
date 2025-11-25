@@ -17,6 +17,7 @@ def create_env_file():
         print("  - SPOTIFY_CLIENT_ID")
         print("  - SPOTIFY_CLIENT_SECRET")
         print("  - SPOTIFY_REDIRECT_URI (optional, defaults to http://127.0.0.1:5000/api/auth/callback)")
+        print("  - PERPLEXITY_API_KEY (optional, for finding related artists)")
         return
     
     # Create template .env file
@@ -35,6 +36,11 @@ SPOTIFY_CLIENT_SECRET=your-spotify-client-secret-here
 # Spotify OAuth Redirect URI
 # Must match the redirect URI configured in your Spotify app settings
 SPOTIFY_REDIRECT_URI=http://127.0.0.1:5000/api/auth/callback
+
+# Perplexity API Configuration (Optional)
+# Get your API key from https://www.perplexity.ai/settings/api
+# Used for finding related artists (replaces deprecated Spotify endpoints)
+PERPLEXITY_API_KEY=your-perplexity-api-key-here
 """
     
     try:

@@ -31,13 +31,16 @@ pip install -r requirements.txt
    Then edit the created `.env` file with your actual credentials.
    
    **Option B: Create manually**
-   Create a `.env` file in the `backend/` directory with:
+   Create a `.env` file in the `backend/functions/` directory with:
    ```env
    FLASK_SECRET_KEY=your-secret-key-here-generate-a-random-string
    SPOTIFY_CLIENT_ID=your-spotify-client-id
    SPOTIFY_CLIENT_SECRET=your-spotify-client-secret
    SPOTIFY_REDIRECT_URI=http://127.0.0.1:5000/api/auth/callback
+   PERPLEXITY_API_KEY=your-perplexity-api-key-here
    ```
+   
+   **Note:** `PERPLEXITY_API_KEY` is optional but recommended. The app uses Perplexity API to find related artists (replacing deprecated Spotify endpoints). Get your API key from [Perplexity API Settings](https://www.perplexity.ai/settings/api).
 
 4. (Optional) Set up Firebase:
    - Download your Firebase service account key JSON file
